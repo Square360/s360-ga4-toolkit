@@ -1,0 +1,16 @@
+{
+  "// Workspace MCP config for GitHub Copilot agent mode and other VSCode MCP consumers.": "",
+  "// Committed to the repo so teammates get it on clone.": "",
+  "// Prereqs before this works:": "",
+  "//   1. Run `uv venv && uv pip install -e .` in the repo root (creates .venv/bin/ga4-mcp).": "",
+  "//   2. Copy .env.example to .env and set GA4_SERVICE_ACCOUNT_PATH to your JSON key path.": "",
+  "//   3. Copy config/sites.example.yaml to config/sites.yaml and fill in property IDs.": "",
+  "// No shell env setup required — envFile loads .env directly.": "",
+  "servers": {
+    "ga4": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/.venv/bin/ga4-mcp",
+      "envFile": "${workspaceFolder}/.env"
+    }
+  }
+}

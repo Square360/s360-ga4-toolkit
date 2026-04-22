@@ -1,0 +1,29 @@
+# Don't ship credentials or caches into the image
+.env
+.env.*
+!.env.example
+config/sites.yaml
+*.json
+!tests/fixtures/*.json
+
+# Python caches and envs
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# VCS
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Docs we don't need at runtime
+docs/
+tests/

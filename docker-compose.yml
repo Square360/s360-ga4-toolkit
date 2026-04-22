@@ -1,0 +1,37 @@
+# ga4-toolkit — MCP server via docker-compose
+#
+# This is the "just run it" path for teammates who don't have Python 3.11 + uv
+# set up locally. It mounts the secret service-account JSON and sites.yaml from
+# the host — nothing secret is ever baked into the image.
+#
+# Prerequisites:
+#   1. Copy .env.example to .env and set GA4_SERVICE_ACCOUNT_PATH_HOST
+#      to the absolute path of your service-account JSON on the host.
+#   2. Copy config/sites.example.yaml to config/sites.yaml and fill in your property IDs.
+#   3. Run: `docker compose up --build`
+#
+# The MCP server speaks stdio — configure your MCP client to invoke the container
+# with `docker compose run --rm ga4-mcp` or wire it up via your MCP client's
+# standard MCP server registration flow.
+
+services:
+  ga4-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: s360-ga4-toolkit:latest
+    container_name: s360-ga4-mcp
+    # Stdio MCP transport requires stdin open and a pty
+    stdin_open: true
+    tty: true
+    environment:
+      # These override the Dockerfile defaults if set; otherwise the defaults apply.
+      GA4_DEFAULT_LOOKBACK_DAYS: ${GA4_DEFAULT_LOOKBACK_DAYS:-30}
+      GA4_LOG_LEVEL: ${GA4_LOG_LEVEL:-INFO}
+    volumes:
+      # Mount the service-account JSON read-only from the host.
+      # Set GA4_SERVICE_ACCOUNT_PATH_HOST in .env to the absolute host path.
+      - ${GA4_SERVICE_ACCOUNT_PATH_HOST}:/app/secrets/service-account.json:ro
+      # Mount the sites config from the repo (or override via GA4_SITES_CONFIG_HOST).
+      - ${GA4_SITES_CONFIG_HOST:-./config/sites.yaml}:/app/config/sites.yaml:ro
+    restart: "no"

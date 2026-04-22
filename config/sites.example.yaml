@@ -1,0 +1,25 @@
+# Site friendly-name → GA4 property mapping.
+# Copy this to sites.yaml (gitignored) and fill in your actual property IDs.
+#
+# Each entry's key is the friendly name used on the CLI:
+#   ga4 top-pages budget-lab --last 30d
+#
+# Fields:
+#   property_id — the numeric GA4 property ID (Admin → Property Settings)
+#   domain      — primary domain; used for display only, not for querying
+#   notes       — optional free text
+
+sites:
+  budget-lab:
+    property_id: "000000000"
+    domain: "budgetlab.yale.edu"
+    notes: "Yale Budget Lab — first consumer, informs VRT config"
+
+  # Add more sites as you grant the service account Viewer access on them:
+  # cases-som:
+  #   property_id: "111111111"
+  #   domain: "cases.som.yale.edu"
+  #
+  # square360:
+  #   property_id: "222222222"
+  #   domain: "square360.com"
