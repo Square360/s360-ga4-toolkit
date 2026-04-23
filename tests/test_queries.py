@@ -147,8 +147,8 @@ def test_pageviews_for_paths_empty_list_still_valid(mock_client: MagicMock) -> N
 def test_top_landing_pages_parses_response(mock_client: MagicMock) -> None:
     mock_client.run_report.return_value = FakeResponse(
         rows=[
-            make_row(["/"], ["1500", "1200", "0.58"]),
-            make_row(["/research"], ["600", "500", "0.72"]),
+            make_row(["/", "Home"], ["1500", "1200", "0.58"]),
+            make_row(["/research", "Research"], ["600", "500", "0.72"]),
         ]
     )
 
@@ -157,7 +157,7 @@ def test_top_landing_pages_parses_response(mock_client: MagicMock) -> None:
     assert len(result) == 2
     assert result[0].path == "/"
     assert result[0].pageviews == 1500  # sessions, reused as the "count" slot
-    assert result[0].title == ""  # landing-page report has no title dimension
+    assert result[0].title == "Home"
 
 
 # ---------------------------------------------------------------------------

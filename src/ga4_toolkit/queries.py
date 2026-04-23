@@ -318,7 +318,7 @@ def top_landing_pages(
     request = RunReportRequest(
         property=_property(property_id),
         date_ranges=[DateRange(start_date=_normalize_date(start_date), end_date=_normalize_date(end_date))],
-        dimensions=[Dimension(name="landingPage")],
+        dimensions=[Dimension(name="landingPage"), Dimension(name="pageTitle")],
         metrics=[
             Metric(name="sessions"),
             Metric(name="activeUsers"),
@@ -332,7 +332,7 @@ def top_landing_pages(
     return [
         PageStat(
             path=row.dimension_values[0].value,
-            title="",  # landing-page report doesn't include title; keep shape consistent
+            title=row.dimension_values[1].value,
             pageviews=_int(row.metric_values[0].value),  # sessions, reused as the "count" slot
             active_users=_int(row.metric_values[1].value),
             engagement_rate=_float(row.metric_values[2].value),
