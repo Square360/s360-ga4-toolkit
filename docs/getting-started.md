@@ -153,6 +153,29 @@ Replace `/path/to/ga4-mcp` with the output of `which ga4-mcp` and swap `yourname
 
 Save. Restart VSCode. Open any workspace, enable Copilot agent mode, and the `ga4` tools should be available.
 
+### Per-project `.vscode/mcp.json` (alternative)
+
+If you'd rather wire the MCP into a specific repo instead of user-level (useful if you're developing against the toolkit itself, or want different GA4 configs per project), create `.vscode/mcp.json` in the repo root:
+
+```json
+{
+  "servers": {
+    "ga4": {
+      "type": "stdio",
+      "command": "/absolute/path/to/ga4-mcp",
+      "envFile": "/absolute/path/to/s360-ga4-toolkit/.env"
+    }
+  }
+}
+```
+
+`envFile` points at the toolkit's own `.env`, so you don't have to duplicate env vars in every project's mcp.json. Two things to know:
+
+- **The `.env` must contain `GA4_SITES_CONFIG`** as an absolute path, otherwise the MCP server launches with VSCode's cwd (the project repo, not the toolkit) and falls back to looking for `./config/sites.yaml` there — which doesn't exist. You'll see errors like "sites.yaml isn't configured" from Copilot.
+- **`command` and `envFile` both need absolute paths.** VSCode's MCP config doesn't expand `$HOME`, `~`, or `${workspaceFolder}` at this level.
+
+This is the pattern to use when you've cloned the toolkit for development and want Copilot in that same repo to use the `.venv`'s `ga4-mcp` binary directly rather than the user-level install.
+
 ## Step 8 — You're done
 
 The CLI works from any terminal. Claude Code sees the tools from any repo. Copilot sees them from any workspace. No per-project setup needed from here on.
@@ -170,5 +193,7 @@ To query a new property, grant the service-account email Viewer on it in GA4, th
 **HTTP 403 from Google on a query** — The service account isn't a Viewer on that property. Grant it in GA4 Admin → Property access management.
 
 **CLI works but MCP doesn't** — Almost always an env issue. The CLI picks env from your shell; the MCP server is launched by Claude Code or VSCode with a fresh environment that only has what's in the `env`/`envFile` block of the config. Double-check that block has the paths.
+
+**Copilot or Claude says "sites.yaml isn't configured" and asks for a property ID** — The MCP server launched without `GA4_SITES_CONFIG` set, so it fell back to looking for `./config/sites.yaml` relative to the editor's working directory and didn't find one. Do *not* let the agent rebuild a fresh sites.yaml — that creates a split-brain config. Instead, add `GA4_SITES_CONFIG=/absolute/path/to/sites.yaml` to the env block (or the `.env` file the MCP reads via `envFile`) and restart the MCP server.
 
 **I want to try a query before adding a property to sites.yaml** — Pass the numeric property ID directly: `ga4 summary 435742842 --last 30d`. All commands accept a numeric ID in place of a friendly name.
