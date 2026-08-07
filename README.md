@@ -10,13 +10,24 @@ Built at [Square360](https://square360.com) and released under MIT so anyone on 
 
 ## What's in the box
 
-Five query functions, exposed identically through a CLI and an MCP server:
+Eight query functions, exposed identically through a CLI and an MCP server:
 
+**Content performance**
 - `top_pages` — top pages by pageviews, with active users and engagement rate
-- `traffic_by_date` — sessions / users / pageviews time series, day/week/month granularity
-- `pageviews_for_paths` — pageviews + users for a specific list of URL paths
 - `top_landing_pages` — entry-point pages for the period
+- `pageviews_for_paths` — pageviews + users for a specific list of URL paths
+
+**Traffic patterns**
+- `traffic_by_date` — sessions / users / pageviews time series, day/week/month granularity
 - `device_and_channel_breakdown` — totals + device (mobile/desktop/tablet) + channel grouping split
+
+**Acquisition / attribution (v0.2)**
+- `top_campaigns` — top UTM campaigns by sessions, with source/medium breakdown
+- `top_sources` — top traffic sources by sessions, with medium breakdown
+- `top_channels` — top default channel groupings (Organic Search, Paid Search, Social, Direct, etc.) with source breakdown
+- `health_check` — sweep every configured site for signs of life over the last N full days (default 3, ending yesterday to absorb GA4's 24-48h processing lag). A site is `dead` only when active users AND pageviews are both zero across the window — stray bot sessions don't count as alive. Mark expected-dead sites `skip_health_check: true` in `sites.yaml`. The CLI exits 1 on any dead/errored site; `scripts/health-check-alert.sh` wraps it for a scheduled run that creates a Bear alert note on failure (loaded on the work Mac as LaunchAgent `com.square360.ga4-health`, daily 07:52).
+
+The three acquisition queries partition unattributed rows (`(not set)` / `(not provided)`) to the bottom of results and flag them with `attributed=False`. `(direct)` / `(none)` stays as attributed traffic — it's real, just unreferred. Use the CLI's `--only-attributed` flag (or the MCP tool's `only_attributed=True`) to drop unattributed rows entirely.
 
 Add a new function in `src/ga4_toolkit/queries.py` and it becomes available in both surfaces with no duplication.
 

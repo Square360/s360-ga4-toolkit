@@ -12,18 +12,24 @@ are thin wrappers over this same module.
 from ga4_toolkit.queries import (
     device_and_channel_breakdown,
     pageviews_for_paths,
+    top_campaigns,
+    top_channels,
     top_landing_pages,
     top_pages,
+    top_sources,
     traffic_by_date,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "__version__",
     "device_and_channel_breakdown",
     "pageviews_for_paths",
+    "top_campaigns",
+    "top_channels",
     "top_landing_pages",
     "top_pages",
+    "top_sources",
     "traffic_by_date",
 ]

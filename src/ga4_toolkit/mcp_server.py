@@ -209,6 +209,123 @@ def site_summary(
     return summary.to_dict()
 
 
+@mcp.tool()
+def health_check(days: int = 3) -> dict[str, Any]:
+    """Check every configured site is still receiving GA4 data.
+
+    Window is `days` full days ending yesterday (GA4 processing lags 24-48h).
+    A site is dead when it shows zero active users AND zero pageviews across
+    the whole window — stray bot sessions don't count as alive. Sites marked
+    skip_health_check in sites.yaml report as skipped; 403s as no_access.
+
+    Returns {window_days, healthy, results: [{site, property_id, status,
+    active_users, pageviews, detail}]}.
+    """
+    client, _config = _client_and_config()
+    sites = load_sites()
+    results = []
+    for name, cfg in sites.items():
+        if cfg.skip_health_check:
+            results.append(
+                queries.HealthResult(name, cfg.property_id, "skipped", 0, 0, detail="skip_health_check")
+            )
+            continue
+        results.append(queries.health_check_site(client, name, cfg.property_id, window_days=days))
+    return {
+        "window_days": days,
+        "healthy": all(r.status in ("ok", "skipped", "no_access") for r in results),
+        "results": [r.to_dict() for r in results],
+    }
+
+
+@mcp.tool()
+def top_campaigns(
+    site: str,
+    last: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 25,
+    only_attributed: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the top UTM campaigns by sessions for a site, with source/medium breakdown.
+
+    Session-scoped — answers "which campaigns drove traffic in this period?"
+
+    Args:
+        site: Friendly site name (from list_sites) or numeric GA4 property ID.
+        last: Relative date range like '30d'. Mutually exclusive with start/end.
+        start_date / end_date: Explicit YYYY-MM-DD range.
+        limit: Max rows to return. Default 25.
+        only_attributed: If True, filter out "(not set)" / "(not provided)" rows.
+
+    Returns a list of {primary (campaign), secondary (source/medium), sessions,
+    active_users, engagement_rate, attributed}. Unattributed rows appear at the
+    end with attributed=False — callers that want clean data can filter those out
+    (or pass only_attributed=True).
+    """
+    client, config = _client_and_config()
+    start, end = _resolve_dates(last, start_date, end_date, config.default_lookback_days)
+    property_id = resolve_site(site)
+    rows = queries.top_campaigns(client, property_id, start, end, limit=limit)
+    if only_attributed:
+        rows = [r for r in rows if r.attributed]
+    return [r.to_dict() for r in rows]
+
+
+@mcp.tool()
+def top_sources(
+    site: str,
+    last: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 25,
+    only_attributed: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the top traffic sources by sessions for a site, with medium breakdown.
+
+    Session-scoped — answers "where is traffic coming from?"
+
+    "(direct)" traffic IS included (typed URLs, bookmarks, app links — real
+    traffic with no referrer). "(not set)" / "(not provided)" rows are
+    partitioned at the end with attributed=False.
+
+    Args / Returns: same shape as top_campaigns.
+    """
+    client, config = _client_and_config()
+    start, end = _resolve_dates(last, start_date, end_date, config.default_lookback_days)
+    property_id = resolve_site(site)
+    rows = queries.top_sources(client, property_id, start, end, limit=limit)
+    if only_attributed:
+        rows = [r for r in rows if r.attributed]
+    return [r.to_dict() for r in rows]
+
+
+@mcp.tool()
+def top_channels(
+    site: str,
+    last: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 25,
+    only_attributed: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the top default channel groupings by sessions, with source breakdown.
+
+    Uses GA4's `sessionDefaultChannelGroup` (Organic Search, Paid Search, Social,
+    Direct, Referral, Email, Display, etc.) — answers "what's the organic/paid/
+    social/direct split?"
+
+    Args / Returns: same shape as top_campaigns.
+    """
+    client, config = _client_and_config()
+    start, end = _resolve_dates(last, start_date, end_date, config.default_lookback_days)
+    property_id = resolve_site(site)
+    rows = queries.top_channels(client, property_id, start, end, limit=limit)
+    if only_attributed:
+        rows = [r for r in rows if r.attributed]
+    return [r.to_dict() for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

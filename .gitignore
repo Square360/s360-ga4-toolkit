@@ -53,3 +53,5 @@ htmlcov/
 # Docker
 *.tar
 *.bak
+scripts/health-check.out.log
+scripts/health-check.err.log

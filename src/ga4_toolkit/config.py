@@ -34,6 +34,7 @@ class SiteConfig:
     property_id: str
     domain: str
     notes: str = ""
+    skip_health_check: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,7 @@ def load_sites(sites_path: str | Path | None = None) -> dict[str, SiteConfig]:
             property_id=str(property_id),
             domain=str(entry.get("domain", "")),
             notes=str(entry.get("notes", "")),
+            skip_health_check=bool(entry.get("skip_health_check", False)),
         )
 
     return result

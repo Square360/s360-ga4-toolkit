@@ -68,6 +68,27 @@ class ChannelBreakdown:
 
 
 @dataclass(frozen=True)
+class AcquisitionStat:
+    """One row of a traffic-acquisition report (campaigns, sources, channels).
+
+    `attributed` is False when GA4 returned a placeholder value ("(not set)" or
+    "(not provided)") for the primary dimension — meaning the session couldn't
+    be tied back to a real campaign/source/channel. Callers should expect these
+    rows and decide whether to include them in calculations.
+    """
+
+    primary: str
+    secondary: str
+    sessions: int
+    active_users: int
+    engagement_rate: float
+    attributed: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class SiteSummary:
     """Aggregate summary from device_and_channel_breakdown."""
 
@@ -135,7 +156,7 @@ def days_ago_range(days: int) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Query functions — the v0.1 five
+# Query functions — content and traffic
 # ---------------------------------------------------------------------------
 
 
@@ -395,6 +416,151 @@ def device_and_channel_breakdown(
     )
 
 
+# ---------------------------------------------------------------------------
+# Acquisition queries — v0.2
+# ---------------------------------------------------------------------------
+
+
+# GA4 returns these placeholder values when it can't attribute a session to a
+# real campaign/source/channel. Treat them as unattributed and partition to the
+# bottom of the result list so callers can filter or deprioritise easily.
+#
+# Note: "(direct)" / "(none)" is NOT in this list — direct traffic is real
+# traffic (typed URL, bookmark, app link), just without a referrer. Different
+# signal from unattributed.
+_UNATTRIBUTED_MARKERS = frozenset({"(not set)", "(not provided)"})
+
+
+def _is_attributed(primary_value: str) -> bool:
+    """True when the primary dimension value is a real campaign/source/channel."""
+    return primary_value not in _UNATTRIBUTED_MARKERS
+
+
+def _partition_acquisition(rows: list[AcquisitionStat]) -> list[AcquisitionStat]:
+    """Return attributed rows first (preserving order), unattributed rows last."""
+    attributed = [r for r in rows if r.attributed]
+    unattributed = [r for r in rows if not r.attributed]
+    return attributed + unattributed
+
+
+def _run_acquisition_query(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    start_date: str | date,
+    end_date: str | date,
+    primary_dimension: str,
+    secondary_dimension: str,
+    limit: int,
+) -> list[AcquisitionStat]:
+    """Shared runner for the three acquisition queries.
+
+    Fetches sessions/activeUsers/engagementRate grouped by (primary, secondary),
+    ordered by sessions desc, then partitions unattributed rows to the bottom.
+    """
+    from google.analytics.data_v1beta.types import (
+        DateRange,
+        Dimension,
+        Metric,
+        OrderBy,
+        RunReportRequest,
+    )
+
+    request = RunReportRequest(
+        property=_property(property_id),
+        date_ranges=[DateRange(start_date=_normalize_date(start_date), end_date=_normalize_date(end_date))],
+        dimensions=[Dimension(name=primary_dimension), Dimension(name=secondary_dimension)],
+        metrics=[
+            Metric(name="sessions"),
+            Metric(name="activeUsers"),
+            Metric(name="engagementRate"),
+        ],
+        order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="sessions"), desc=True)],
+        limit=limit,
+    )
+    response = client.run_report(request)
+
+    rows = [
+        AcquisitionStat(
+            primary=row.dimension_values[0].value,
+            secondary=row.dimension_values[1].value,
+            sessions=_int(row.metric_values[0].value),
+            active_users=_int(row.metric_values[1].value),
+            engagement_rate=_float(row.metric_values[2].value),
+            attributed=_is_attributed(row.dimension_values[0].value),
+        )
+        for row in response.rows
+    ]
+    return _partition_acquisition(rows)
+
+
+def top_campaigns(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    start_date: str | date,
+    end_date: str | date,
+    limit: int = 25,
+) -> list[AcquisitionStat]:
+    """Top UTM campaigns by sessions over a date range.
+
+    Answers: "Which campaigns are driving traffic?" Session-scoped
+    (`sessionCampaignName`), broken down by source/medium. Unattributed rows
+    — "(not set)" campaigns — are partitioned to the bottom of the returned list.
+    """
+    return _run_acquisition_query(
+        client, property_id, start_date, end_date,
+        primary_dimension="sessionCampaignName",
+        secondary_dimension="sessionSourceMedium",
+        limit=limit,
+    )
+
+
+def top_sources(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    start_date: str | date,
+    end_date: str | date,
+    limit: int = 25,
+) -> list[AcquisitionStat]:
+    """Top traffic sources by sessions over a date range.
+
+    Answers: "Where is traffic coming from?" Session-scoped (`sessionSource`),
+    broken down by medium. "(direct)" traffic is included (it's real traffic);
+    "(not set)" rows are partitioned to the bottom.
+    """
+    return _run_acquisition_query(
+        client, property_id, start_date, end_date,
+        primary_dimension="sessionSource",
+        secondary_dimension="sessionMedium",
+        limit=limit,
+    )
+
+
+def top_channels(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    start_date: str | date,
+    end_date: str | date,
+    limit: int = 25,
+) -> list[AcquisitionStat]:
+    """Top default channel groupings by sessions over a date range.
+
+    Answers: "What's the organic/paid/social/direct split?" Uses GA4's
+    `sessionDefaultChannelGroup` (Organic Search, Paid Search, Social, Direct,
+    Referral, Email, etc.), broken down by source. Unattributed rows at bottom.
+    """
+    return _run_acquisition_query(
+        client, property_id, start_date, end_date,
+        primary_dimension="sessionDefaultChannelGroup",
+        secondary_dimension="sessionSource",
+        limit=limit,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal: channel/device breakdown helper
+# ---------------------------------------------------------------------------
+
+
 def _breakdown_query(
     client: BetaAnalyticsDataClient,
     property_id: str,
@@ -421,3 +587,66 @@ def _breakdown_query(
         )
         for row in response.rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Health check — is every property still receiving data?
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HealthResult:
+    """Health-check verdict for a single site.
+
+    status values:
+      ok        — real activity in the window (active users or pageviews > 0)
+      dead      — property returned rows but zero users AND zero pageviews
+                  across the whole window (stray bot sessions don't count as
+                  alive), or no rows at all
+      no_access — the service account got a 403 for this property
+      error     — any other API failure (quota, transient, misconfig)
+      skipped   — sites.yaml marks the site skip_health_check: true
+    """
+
+    site: str
+    property_id: str
+    status: Literal["ok", "dead", "no_access", "error", "skipped"]
+    active_users: int
+    pageviews: int
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def health_check_site(
+    client: BetaAnalyticsDataClient,
+    site_name: str,
+    property_id: str,
+    window_days: int = 3,
+) -> HealthResult:
+    """Check one property for signs of life over the last `window_days` full days.
+
+    The window ends yesterday — GA4 processing lags 24-48h, so today's counts
+    are never trustworthy. Three full days is the default because legitimately
+    tiny sites (single-digit sessions/day) show occasional 2-day gaps; a dead
+    tag shows zero users AND zero pageviews for the whole window. Stray
+    sessions with no users/pageviews — the residue a dead property still
+    logs — deliberately don't count as alive.
+    """
+    from google.api_core import exceptions as gexc
+
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=window_days - 1)
+
+    try:
+        points = traffic_by_date(client, property_id, start, end)
+    except gexc.PermissionDenied as exc:
+        return HealthResult(site_name, property_id, "no_access", 0, 0, detail=str(exc.message))
+    except gexc.GoogleAPIError as exc:
+        return HealthResult(site_name, property_id, "error", 0, 0, detail=str(exc))
+
+    users = sum(p.active_users for p in points)
+    views = sum(p.pageviews for p in points)
+    status: Literal["ok", "dead"] = "ok" if (users > 0 or views > 0) else "dead"
+    return HealthResult(site_name, property_id, status, users, views)

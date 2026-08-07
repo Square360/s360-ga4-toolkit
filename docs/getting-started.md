@@ -107,6 +107,25 @@ You should see totals plus device and channel breakdowns. If that returns real n
 
 If you get an error about the service-account file, re-check the path in `GA4_SERVICE_ACCOUNT_PATH`. If you get a 403 from Google, the service account isn't a Viewer on that property yet.
 
+**Other commands worth knowing about:**
+
+```bash
+ga4 top-pages budget-lab --last 30d -n 10        # most-viewed pages
+ga4 landing-pages budget-lab --last 30d -n 10    # session entry points
+ga4 traffic budget-lab --last 30d --by day       # time series
+
+# Acquisition / attribution (v0.2):
+ga4 campaigns budget-lab --last 30d              # top UTM campaigns
+ga4 sources budget-lab --last 30d                # top traffic sources
+ga4 channels budget-lab --last 30d               # Organic / Paid / Social split
+
+# Any of the acquisition commands accept --only-attributed (-a) to hide
+# (not set) / (not provided) rows entirely:
+ga4 campaigns budget-lab --last 30d --only-attributed
+```
+
+All commands support `--format json` or `--format csv` for programmatic use, and either `--last 30d` (relative) or `--start / --end` (explicit dates).
+
 ## Step 6 — Wire up Claude Code
 
 This makes the `ga4` tools available inside any Claude Code session, from any repo.
