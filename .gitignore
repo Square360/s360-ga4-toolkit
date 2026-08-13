@@ -55,3 +55,4 @@ htmlcov/
 *.bak
 scripts/health-check.out.log
 scripts/health-check.err.log
+scripts/.no-access-state.json
