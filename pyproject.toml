@@ -1,6 +1,6 @@
 [project]
 name = "ga4-toolkit"
-version = "0.3.0"
+version = "0.4.0"
 description = "Portable GA4 Data API toolkit — Python CLI + MCP server. Read-only, service-account auth."
 readme = "README.md"
 license = { text = "MIT" }
@@ -24,6 +24,7 @@ dependencies = [
     "pyyaml>=6.0.1",
     "python-dotenv>=1.0.1",
     "mcp>=1.0.0",
+    "google-api-python-client>=2.100.0",
 ]
 
 [project.optional-dependencies]

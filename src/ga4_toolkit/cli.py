@@ -562,3 +562,179 @@ def health_check_cmd(
 
 if __name__ == "__main__":
     app()
+
+
+# ---------------------------------------------------------------------------
+# Search Console — `ga4 gsc ...`
+# ---------------------------------------------------------------------------
+
+gsc_app = typer.Typer(
+    help="Search Console: monthly search performance and sitemap status.",
+    no_args_is_help=True,
+)
+app.add_typer(gsc_app, name="gsc")
+
+
+def _get_gsc_service() -> Any:
+    from . import gsc as gsc_mod
+
+    try:
+        config = load_toolkit_config()
+    except ConfigError as e:
+        err_console.print(f"[red]Config error:[/red] {e}")
+        raise typer.Exit(code=2) from None
+    _setup_logging(config.log_level)
+    return gsc_mod.build_gsc_service(config.service_account_path)
+
+
+def _parse_month(month: str | None) -> tuple[int, int]:
+    from . import gsc as gsc_mod
+
+    if not month:
+        return gsc_mod.default_report_month()
+    try:
+        y, m = month.split("-")
+        return int(y), int(m)
+    except ValueError:
+        err_console.print(f"[red]Bad --month:[/red] {month!r} (expected YYYY-MM)")
+        raise typer.Exit(code=2) from None
+
+
+MOVER_PCT = 25.0
+MOVER_MIN_CLICKS = 100
+
+
+@gsc_app.command(name="summary")
+def gsc_summary_cmd(
+    month: str = typer.Option(None, "--month", help="Month to report, YYYY-MM. Default: last full month."),
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+) -> None:
+    """Search performance for every site: clicks/impressions vs the prior month.
+
+    The programmatic replacement for Google's per-property monthly
+    "Your Search performance" emails. Movers (|clicks delta| >= 25% on 100+
+    clicks) are flagged. Sites where the service account lacks Search Console
+    access report no_access — that's the access-request worklist.
+    """
+    from . import gsc as gsc_mod
+
+    year, mon = _parse_month(month)
+    service = _get_gsc_service()
+    try:
+        sites = load_sites()
+    except ConfigError as e:
+        err_console.print(f"[red]Config error:[/red] {e}")
+        raise typer.Exit(code=2) from None
+
+    results = [gsc_mod.search_month(service, cfg, year, mon) for cfg in sites.values()]
+
+    if fmt == OutputFormat.JSON:
+        console.print_json(data={"month": f"{year:04d}-{mon:02d}", "results": [r.to_dict() for r in results]})
+        return
+    if fmt == OutputFormat.CSV:
+        writer = csv.DictWriter(
+            sys.stdout,
+            fieldnames=["site", "status", "clicks", "prev_clicks", "impressions", "prev_impressions", "ctr", "position", "detail"],
+        )
+        writer.writeheader()
+        for r in results:
+            row = r.to_dict()
+            row.pop("gsc_property", None)
+            writer.writerow(row)
+        return
+
+    table = Table(title=f"Search performance — {year:04d}-{mon:02d} (vs prior month)", header_style="bold")
+    table.add_column("Site")
+    table.add_column("Status")
+    table.add_column("Clicks", justify="right")
+    table.add_column("Δ%", justify="right")
+    table.add_column("Impressions", justify="right")
+    table.add_column("CTR", justify="right")
+    table.add_column("Avg pos", justify="right")
+    table.add_column("", style="bold")
+    for r in sorted(results, key=lambda r: (r.status != "ok", -r.clicks)):
+        if r.status != "ok":
+            table.add_row(r.site, f"[yellow]{r.status}[/yellow]", "-", "-", "-", "-", "-", "")
+            continue
+        delta = r.clicks_delta_pct
+        delta_txt = f"{delta:+.0f}%" if delta is not None else "new"
+        mover = ""
+        if delta is not None and abs(delta) >= MOVER_PCT and max(r.clicks, r.prev_clicks) >= MOVER_MIN_CLICKS:
+            mover = "[red]▼[/red]" if delta < 0 else "[green]▲[/green]"
+        table.add_row(
+            r.site, "[green]ok[/green]", f"{r.clicks:,}", delta_txt,
+            f"{r.impressions:,}", f"{r.ctr * 100:.1f}%", f"{r.position:.1f}", mover,
+        )
+    console.print(table)
+
+
+@gsc_app.command(name="sites")
+def gsc_sites_cmd(
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+) -> None:
+    """Search Console properties the service account can currently see."""
+    from . import gsc as gsc_mod
+
+    service = _get_gsc_service()
+    entries = gsc_mod.list_accessible_sites(service)
+    if fmt == OutputFormat.JSON:
+        console.print_json(data={"sites": entries})
+        return
+    table = Table(title="Search Console properties visible to the service account", header_style="bold")
+    table.add_column("Property")
+    table.add_column("Permission")
+    for e in sorted(entries, key=lambda e: e["siteUrl"]):
+        table.add_row(e["siteUrl"], e["permissionLevel"])
+    console.print(table)
+    if not entries:
+        err_console.print("[yellow]None visible — add the service account per property in Search Console.[/yellow]")
+
+
+@gsc_app.command(name="sitemaps")
+def gsc_sitemaps_cmd(
+    site: str = typer.Argument(None, help="One site (friendly name). Default: all sites."),
+    flagged_only: bool = typer.Option(False, "--flagged", help="Show only flagged rows."),
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+) -> None:
+    """Sitemap status per site: last download, URL count, errors/warnings.
+
+    Validates sitemap XML configuration as Search Console sees it — flags parse
+    errors, warnings, pending, never-downloaded, stale downloads (>30d), and
+    sites with no sitemap submitted at all.
+    """
+    from . import gsc as gsc_mod
+
+    service = _get_gsc_service()
+    try:
+        sites = load_sites()
+    except ConfigError as e:
+        err_console.print(f"[red]Config error:[/red] {e}")
+        raise typer.Exit(code=2) from None
+    targets = [sites[site]] if site and site in sites else list(sites.values())
+    if site and site not in sites:
+        err_console.print(f"[red]Unknown site:[/red] {site}")
+        raise typer.Exit(code=2)
+
+    rows: list[gsc_mod.SitemapStatus] = []
+    for cfg in targets:
+        rows.extend(gsc_mod.sitemap_statuses(service, cfg))
+    if flagged_only:
+        rows = [r for r in rows if r.status == "flagged"]
+
+    if fmt == OutputFormat.JSON:
+        console.print_json(data={"results": [r.to_dict() for r in rows]})
+        return
+    table = Table(title="Sitemaps — Search Console view", header_style="bold")
+    table.add_column("Site")
+    table.add_column("Sitemap")
+    table.add_column("Status")
+    table.add_column("Last DL")
+    table.add_column("URLs", justify="right")
+    table.add_column("Detail", overflow="fold", style="dim")
+    for r in rows:
+        style = "green" if r.status == "ok" else "yellow"
+        table.add_row(
+            r.site, r.path or "-", f"[{style}]{r.status}[/{style}]",
+            r.last_downloaded or "-", f"{r.submitted_urls:,}", r.detail,
+        )
+    console.print(table)

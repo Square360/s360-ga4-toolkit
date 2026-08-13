@@ -35,6 +35,7 @@ class SiteConfig:
     domain: str
     notes: str = ""
     skip_health_check: bool = False
+    gsc_property: str = ""  # Search Console property URL; empty = derive https://{domain}/
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,7 @@ def load_sites(sites_path: str | Path | None = None) -> dict[str, SiteConfig]:
             domain=str(entry.get("domain", "")),
             notes=str(entry.get("notes", "")),
             skip_health_check=bool(entry.get("skip_health_check", False)),
+            gsc_property=str(entry.get("gsc_property", "")),
         )
 
     return result

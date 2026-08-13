@@ -150,6 +150,26 @@ ga4 summary yale-budget-lab --last 30d
 
 Every command supports `--format table|json|csv`. Table is the default and renders via `rich`.
 
+### Search Console — `ga4 gsc ...`
+
+Same service-account key; the SA must be added as a user (Restricted is enough) per property in Search Console (Settings → Users and permissions), and the **Google Search Console API** must be enabled on the GCP project. A site's property URL defaults to `https://{domain}/`; set `gsc_property` in `sites.yaml` for domain properties (`sc-domain:example.org`).
+
+```bash
+# The monthly "Your Search performance" emails, one table for all sites
+ga4 gsc summary            # last full month vs the month before
+ga4 gsc summary --month 2026-07
+
+# Which properties can the SA see (doubles as the access-request worklist)
+ga4 gsc sites
+
+# Sitemap validation as Search Console sees it — errors, warnings,
+# never/stale downloads, missing sitemaps. Coverage report is deliberately
+# not surfaced (admin/login-side noise on Drupal sites).
+ga4 gsc sitemaps --flagged
+```
+
+Search data lags 2–3 days; run monthly summaries on the 3rd or later.
+
 ## MCP server
 
 The MCP server exposes the same five query functions as tools plus a `list_sites` tool. It speaks stdio, so it's configured like any other stdio MCP server.
