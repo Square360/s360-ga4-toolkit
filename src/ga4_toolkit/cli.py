@@ -560,6 +560,70 @@ def health_check_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command(name="retention-audit")
+def retention_audit_cmd(
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+    target: str = typer.Option(
+        "FOURTEEN_MONTHS", "--target", help="Required value for both event and user retention."
+    ),
+) -> None:
+    """Audit event + user data retention on every property the SA can see.
+
+    Sweeps all properties via the Admin API (not just sites.yaml). Exits 1
+    if any property is below --target on either setting, so it can run on
+    a schedule like health-check. Fixing is a UI job (needs Editor):
+    Admin → Data collection and modification → Data retention.
+    """
+    from . import admin as admin_mod
+
+    try:
+        config = load_toolkit_config()
+        sites = load_sites()
+    except ConfigError as e:
+        err_console.print(f"[red]Config error:[/red] {e}")
+        raise typer.Exit(code=2) from None
+    _setup_logging(config.log_level)
+    service = admin_mod.build_admin_service(config.service_account_path)
+    results = admin_mod.retention_audit(service, sites, target=target)
+    short = [r for r in results if r.status != "ok"]
+
+    if fmt == OutputFormat.JSON:
+        console.print_json(
+            data={"target": target, "compliant": not short, "results": [r.to_dict() for r in results]}
+        )
+    elif fmt == OutputFormat.CSV:
+        fields = list(results[0].to_dict().keys()) if results else []
+        writer = csv.DictWriter(sys.stdout, fieldnames=fields)
+        writer.writeheader()
+        for r in results:
+            writer.writerow(r.to_dict())
+    else:
+        style = {"ok": "green", "short": "red bold", "error": "yellow"}
+        table = Table(title=f"GA4 data retention audit — target {target}", header_style="bold")
+        table.add_column("Account")
+        table.add_column("Property")
+        table.add_column("ID")
+        table.add_column("Site")
+        table.add_column("Event")
+        table.add_column("User")
+        table.add_column("Status")
+        for r in results:
+            table.add_row(
+                r.account,
+                r.property_name,
+                r.property_id,
+                r.site,
+                r.event_retention,
+                r.user_retention,
+                f"[{style[r.status]}]{r.status}[/{style[r.status]}]" + (f" {r.detail}" if r.detail else ""),
+            )
+        console.print(table)
+        console.print(f"{len(results)} properties, {len(short)} below target")
+
+    if short:
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
 
