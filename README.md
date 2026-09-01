@@ -21,6 +21,13 @@ Eight query functions, exposed identically through a CLI and an MCP server:
 - `traffic_by_date` — sessions / users / pageviews time series, day/week/month granularity
 - `device_and_channel_breakdown` — totals + device (mobile/desktop/tablet) + channel grouping split
 
+**Events / interactions (v0.5)**
+- `top_events` — every event name firing on a property, by count. Run this first for any "how many downloads / form submits / video plays" question: GA4 returns no rows for an event that was never configured, which reads identically to a genuine zero.
+- `events_by_dimension` — one event split by a dimension (`pagePath`, `linkUrl`, `fileName`, `deviceCategory`, …), optionally scoped to a section of the site with `path_contains`. The breakdown dimension is checked against an allowlist so a typo raises a readable error instead of an opaque GA4 400.
+- `file_downloads` — GA4's enhanced-measurement `file_download` event, resolved to file + referring page. Counts *clicks on links*, never completed transfers, and never sees a file fetched directly, via CDN, or by a crawler.
+
+Two traps worth knowing before you report a download number. Event-scoped history is capped by data retention — see `retention_audit` below; a property left on GA4's 2-month default has no event data older than that, and the query returns rows for the window it has without saying so. And if two tags both fire `file_download` (gtag enhanced measurement alongside a GTM or module tag), every click lands twice under two different `file_name` values, usually the full path and the bare basename. `file_downloads` reports what GA4 holds rather than silently merging: cross-check one file with `events_by_dimension(breakdown="linkUrl")`, and if the linkUrl count is exactly double the per-`fileName` count, the property is double-firing and the per-`fileName` figure is the honest one.
+
 **Acquisition / attribution (v0.2)**
 - `top_campaigns` — top UTM campaigns by sessions, with source/medium breakdown
 - `top_sources` — top traffic sources by sessions, with medium breakdown
@@ -147,6 +154,16 @@ ga4 landing-pages yale-budget-lab --last 30d --format csv
 
 # One-call site summary — totals, device breakdown, channel breakdown
 ga4 summary yale-budget-lab --last 30d
+
+# What does this property actually track? Always the first events call.
+ga4 events kmha --last 12m
+
+# One event, split by a dimension, scoped to a section
+ga4 event kmha file_download --by fileName --path-contains /resources --last 12m
+ga4 event kmha form_submit --by pagePath --last 30d
+
+# File downloads by file and referring page
+ga4 downloads kmha --last 12m --path-contains /resources --ext pdf
 ```
 
 Every command supports `--format table|json|csv`. Table is the default and renders via `rich`.
@@ -260,6 +277,9 @@ Absolute paths only here — user-level config has no `${workspaceFolder}` conte
 - `pageviews_for_paths(site, paths, last?, start_date?, end_date?)`
 - `top_landing_pages(site, last?, start_date?, end_date?, limit=25)`
 - `site_summary(site, last?, start_date?, end_date?)`
+- `top_events(site, last?, start_date?, end_date?, limit=25)`
+- `event_breakdown(site, event_name, last?, start_date?, end_date?, breakdown='pagePath', limit=25, path_contains?)`
+- `file_downloads(site, last?, start_date?, end_date?, limit=25, path_contains?, file_extension?)`
 
 ## Development
 

@@ -465,6 +465,160 @@ def summary_cmd(
     _render_summary(summary, fmt, f"Summary — {site} — {start_date} to {end_date}")
 
 
+def _render_events(rows: list[queries.EventStat], fmt: OutputFormat, title: str) -> None:
+    if fmt == OutputFormat.JSON:
+        console.print_json(data=[r.to_dict() for r in rows])
+    elif fmt == OutputFormat.CSV:
+        writer = csv.DictWriter(sys.stdout, fieldnames=["event_name", "event_count", "active_users"])
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r.to_dict())
+    else:
+        table = Table(title=title, show_lines=False, header_style="bold")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("Event", overflow="fold")
+        table.add_column("Count", justify="right")
+        table.add_column("Active Users", justify="right")
+        for i, r in enumerate(rows, 1):
+            table.add_row(str(i), r.event_name, f"{r.event_count:,}", f"{r.active_users:,}")
+        console.print(table)
+
+
+def _render_event_breakdown(rows: list[queries.EventBreakdown], fmt: OutputFormat, title: str) -> None:
+    if fmt == OutputFormat.JSON:
+        console.print_json(data=[r.to_dict() for r in rows])
+    elif fmt == OutputFormat.CSV:
+        writer = csv.DictWriter(
+            sys.stdout,
+            fieldnames=["event_name", "dimension_name", "dimension", "event_count", "active_users"],
+        )
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r.to_dict())
+    else:
+        table = Table(title=title, show_lines=False, header_style="bold")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column(rows[0].dimension_name if rows else "Dimension", overflow="fold")
+        table.add_column("Count", justify="right")
+        table.add_column("Active Users", justify="right")
+        for i, r in enumerate(rows, 1):
+            table.add_row(str(i), r.dimension or "—", f"{r.event_count:,}", f"{r.active_users:,}")
+        console.print(table)
+
+
+def _render_downloads(rows: list[queries.DownloadStat], fmt: OutputFormat, title: str) -> None:
+    if fmt == OutputFormat.JSON:
+        console.print_json(data=[r.to_dict() for r in rows])
+    elif fmt == OutputFormat.CSV:
+        writer = csv.DictWriter(
+            sys.stdout,
+            fieldnames=["file_name", "page_path", "link_url", "event_count", "active_users"],
+        )
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r.to_dict())
+    else:
+        table = Table(title=title, show_lines=False, header_style="bold")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("File", overflow="fold")
+        table.add_column("From page", overflow="fold")
+        table.add_column("Downloads", justify="right")
+        table.add_column("Active Users", justify="right")
+        for i, r in enumerate(rows, 1):
+            table.add_row(
+                str(i),
+                r.file_name or r.link_url or "—",
+                r.page_path or "—",
+                f"{r.event_count:,}",
+                f"{r.active_users:,}",
+            )
+        console.print(table)
+        if not rows:
+            console.print(
+                "[yellow]No rows.[/yellow] An untracked event and a genuine zero look "
+                "identical here — run [bold]ga4 events <site>[/bold] to check the event exists."
+            )
+
+
+@app.command(name="events")
+def events_cmd(
+    site: str = typer.Argument(..., help="Friendly site name or numeric property ID."),
+    last: str | None = typer.Option(None, "--last"),
+    start: str | None = typer.Option(None, "--start"),
+    end: str | None = typer.Option(None, "--end"),
+    limit: int = typer.Option(25, "--limit", "-n"),
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+) -> None:
+    """All events by count. Answers 'what does this property actually track?'"""
+    client, config = _get_client()
+    start_date, end_date = _parse_date_range(last, start, end, config.default_lookback_days)
+    property_id = resolve_site(site)
+
+    rows = queries.top_events(client, property_id, start_date, end_date, limit=limit)
+    _render_events(rows, fmt, f"Events — {site} — {start_date} to {end_date}")
+
+
+@app.command(name="event")
+def event_cmd(
+    site: str = typer.Argument(..., help="Friendly site name or numeric property ID."),
+    event_name: str = typer.Argument(..., help="Exact GA4 event name, e.g. file_download."),
+    last: str | None = typer.Option(None, "--last"),
+    start: str | None = typer.Option(None, "--start"),
+    end: str | None = typer.Option(None, "--end"),
+    breakdown: str = typer.Option("pagePath", "--by", help="Dimension to split by."),
+    path_contains: str | None = typer.Option(None, "--path-contains", help="Scope to pages containing this substring."),
+    limit: int = typer.Option(25, "--limit", "-n"),
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+) -> None:
+    """One event, split by a dimension. Answers 'where is this firing?'"""
+    client, config = _get_client()
+    start_date, end_date = _parse_date_range(last, start, end, config.default_lookback_days)
+    property_id = resolve_site(site)
+
+    try:
+        rows = queries.events_by_dimension(
+            client,
+            property_id,
+            event_name,
+            start_date,
+            end_date,
+            breakdown=breakdown,
+            limit=limit,
+            path_contains=path_contains,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    _render_event_breakdown(rows, fmt, f"{event_name} by {breakdown} — {site} — {start_date} to {end_date}")
+
+
+@app.command(name="downloads")
+def downloads_cmd(
+    site: str = typer.Argument(..., help="Friendly site name or numeric property ID."),
+    last: str | None = typer.Option(None, "--last"),
+    start: str | None = typer.Option(None, "--start"),
+    end: str | None = typer.Option(None, "--end"),
+    path_contains: str | None = typer.Option(None, "--path-contains", help="Scope to a section, e.g. /resources."),
+    file_extension: str | None = typer.Option(None, "--ext", help="Scope to a file type, e.g. pdf."),
+    limit: int = typer.Option(25, "--limit", "-n"),
+    fmt: OutputFormat = typer.Option(OutputFormat.TABLE, "--format", "-f"),
+) -> None:
+    """File downloads by file and referring page. Counts link clicks, not transfers."""
+    client, config = _get_client()
+    start_date, end_date = _parse_date_range(last, start, end, config.default_lookback_days)
+    property_id = resolve_site(site)
+
+    rows = queries.file_downloads(
+        client,
+        property_id,
+        start_date,
+        end_date,
+        limit=limit,
+        path_contains=path_contains,
+        file_extension=file_extension,
+    )
+    _render_downloads(rows, fmt, f"Downloads — {site} — {start_date} to {end_date}")
+
+
 @app.command(name="sites")
 def sites_cmd() -> None:
     """List configured sites from sites.yaml."""

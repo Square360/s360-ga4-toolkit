@@ -326,6 +326,139 @@ def top_channels(
     return [r.to_dict() for r in rows]
 
 
+@mcp.tool()
+def top_events(
+    site: str,
+    last: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """List every event firing on a site, by count.
+
+    Run this first whenever you're asked about downloads, form submissions,
+    video plays, outbound clicks or any other interaction — it tells you
+    whether the event is tracked at all. GA4 returns no rows for an event that
+    was never configured, which reads identically to a genuine zero, so
+    confirming the event exists here prevents reporting "0 downloads" when the
+    truth is "downloads aren't measured".
+
+    Args:
+        site: Friendly site name (from list_sites) or numeric GA4 property ID.
+        last: Relative date range like '30d', '4w', '3m'.
+        start_date / end_date: Explicit YYYY-MM-DD range.
+        limit: Max rows. Default 25.
+
+    Returns a list of {event_name, event_count, active_users}.
+    """
+    client, config = _client_and_config()
+    start, end = _resolve_dates(last, start_date, end_date, config.default_lookback_days)
+    property_id = resolve_site(site)
+    rows = queries.top_events(client, property_id, start, end, limit=limit)
+    return [r.to_dict() for r in rows]
+
+
+@mcp.tool()
+def event_breakdown(
+    site: str,
+    event_name: str,
+    last: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    breakdown: str = "pagePath",
+    limit: int = 25,
+    path_contains: str | None = None,
+) -> list[dict[str, Any]]:
+    """Split a single event by a dimension — answers "where is this firing?"
+
+    Args:
+        site: Friendly site name or numeric property ID.
+        event_name: Exact GA4 event name, e.g. 'file_download', 'form_submit'.
+        last: Relative date range, e.g. '30d'.
+        start_date / end_date: Explicit range.
+        breakdown: Dimension to split by. One of: pagePath, pageTitle,
+            pageLocation, linkUrl, linkText, linkDomain, fileName,
+            fileExtension, deviceCategory, country, sessionDefaultChannelGroup,
+            sessionSource, sessionMedium. Default 'pagePath'.
+        limit: Max rows. Default 25.
+        path_contains: Only count events that fired on pages whose path
+            contains this substring, e.g. '/resources'.
+
+    Returns a list of {event_name, dimension_name, dimension, event_count, active_users}.
+    """
+    client, config = _client_and_config()
+    start, end = _resolve_dates(last, start_date, end_date, config.default_lookback_days)
+    property_id = resolve_site(site)
+    rows = queries.events_by_dimension(
+        client,
+        property_id,
+        event_name,
+        start,
+        end,
+        breakdown=breakdown,
+        limit=limit,
+        path_contains=path_contains,
+    )
+    return [r.to_dict() for r in rows]
+
+
+@mcp.tool()
+def file_downloads(
+    site: str,
+    last: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 25,
+    path_contains: str | None = None,
+    file_extension: str | None = None,
+) -> list[dict[str, Any]]:
+    """Downloaded files and the pages people downloaded them from.
+
+    Reads GA4's enhanced-measurement `file_download` event. Two caveats to pass
+    on with any number you report from this:
+
+      * It needs enhanced measurement (or a manual `file_download` event) to be
+        switched on. If it isn't, this returns an empty list, which looks exactly
+        like a real zero — check top_events before concluding nobody downloaded
+        anything.
+      * It counts clicks on links, not completed transfers, and never sees a file
+        fetched directly by URL, served from a CDN, or pulled by a crawler.
+
+    One file linked from several pages returns one row per page.
+
+    Do not blind-sum event_count for a per-file total. If a property has two
+    tags firing file_download (gtag enhanced measurement alongside a GTM or
+    module tag), each click is recorded twice under two different file_name
+    values — usually the full path and the bare basename — and summing doubles
+    the real figure. Cross-check with event_breakdown(breakdown='linkUrl'): a
+    linkUrl count that is exactly twice the per-fileName count means the
+    property is double-firing, and the honest number is the per-fileName one.
+
+    Args:
+        site: Friendly site name or numeric property ID.
+        last: Relative date range, e.g. '30d'.
+        start_date / end_date: Explicit range.
+        limit: Max rows. Default 25.
+        path_contains: Scope to a section, e.g. '/resources'.
+        file_extension: Scope to a file type, e.g. 'pdf' (no leading dot).
+
+    Returns a list of {file_name, page_path, link_url, event_count, active_users}.
+    """
+    client, config = _client_and_config()
+    start, end = _resolve_dates(last, start_date, end_date, config.default_lookback_days)
+    property_id = resolve_site(site)
+    rows = queries.file_downloads(
+        client,
+        property_id,
+        start,
+        end,
+        limit=limit,
+        path_contains=path_contains,
+        file_extension=file_extension,
+    )
+    return [r.to_dict() for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

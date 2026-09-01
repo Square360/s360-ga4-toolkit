@@ -590,6 +590,304 @@ def _breakdown_query(
 
 
 # ---------------------------------------------------------------------------
+# Event queries
+# ---------------------------------------------------------------------------
+
+
+# Dimensions it makes sense to break an event down by. GA4 accepts many more,
+# but an unrecognised name comes back as an opaque 400 from the Data API — this
+# allowlist turns that into a useful error before the request is made.
+EVENT_BREAKDOWN_DIMENSIONS = frozenset(
+    {
+        "pagePath",
+        "pageTitle",
+        "pageLocation",
+        "linkUrl",
+        "linkText",
+        "linkDomain",
+        "fileName",
+        "fileExtension",
+        "deviceCategory",
+        "country",
+        "sessionDefaultChannelGroup",
+        "sessionSource",
+        "sessionMedium",
+    }
+)
+
+# GA4's enhanced-measurement event for a click on a link to a document/asset.
+FILE_DOWNLOAD_EVENT = "file_download"
+
+
+@dataclass(frozen=True)
+class EventStat:
+    """One event name and how often it fired."""
+
+    event_name: str
+    event_count: int
+    active_users: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class EventBreakdown:
+    """One event, split by a chosen dimension.
+
+    `dimension_name` records which GA4 dimension `dimension` holds, so a caller
+    reading JSON knows whether it's looking at a page path, a link URL, etc.
+    """
+
+    event_name: str
+    dimension_name: str
+    dimension: str
+    event_count: int
+    active_users: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class DownloadStat:
+    """One downloaded file, attributed to the page the click happened on.
+
+    A single file linked from several pages produces one row per page.
+
+    Do not blind-sum `event_count` to get a per-file total. Where a property
+    has two tags firing `file_download` (gtag enhanced measurement alongside a
+    GTM or module tag, say), each click lands twice under two different
+    `file_name` values — typically the full path and the bare basename — and
+    the sum doubles the truth. Cross-check one file against
+    `events_by_dimension(..., breakdown="linkUrl")`: if the linkUrl count is
+    twice the per-fileName count, the property is double-firing.
+    """
+
+    file_name: str
+    page_path: str
+    link_url: str
+    event_count: int
+    active_users: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _event_name_filter(event_name: str) -> Any:
+    from google.analytics.data_v1beta.types import Filter, FilterExpression
+
+    return FilterExpression(
+        filter=Filter(
+            field_name="eventName",
+            string_filter=Filter.StringFilter(
+                value=event_name,
+                match_type=Filter.StringFilter.MatchType.EXACT,
+            ),
+        )
+    )
+
+
+def _contains_filter(field_name: str, value: str) -> Any:
+    from google.analytics.data_v1beta.types import Filter, FilterExpression
+
+    return FilterExpression(
+        filter=Filter(
+            field_name=field_name,
+            string_filter=Filter.StringFilter(
+                value=value,
+                match_type=Filter.StringFilter.MatchType.CONTAINS,
+                case_sensitive=False,
+            ),
+        )
+    )
+
+
+def _and_filters(*expressions: Any) -> Any:
+    """Combine filter expressions with AND, skipping Nones.
+
+    Returns None when nothing was supplied (GA4 treats a missing
+    `dimension_filter` as "no filter"), and the bare expression when only one
+    survived — an and_group of one is legal but noisy in request logs.
+    """
+    present = [e for e in expressions if e is not None]
+    if not present:
+        return None
+    if len(present) == 1:
+        return present[0]
+
+    from google.analytics.data_v1beta.types import FilterExpression, FilterExpressionList
+
+    return FilterExpression(and_group=FilterExpressionList(expressions=list(present)))
+
+
+def top_events(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    start_date: str | date,
+    end_date: str | date,
+    limit: int = 25,
+) -> list[EventStat]:
+    """Every event name firing on a property, by count.
+
+    Answers: "What is this property actually tracking?" Run this first when you
+    don't know whether an event exists — GA4 returns no rows rather than an
+    error for an event that was never configured, which is easy to misread as
+    "zero downloads" when the truth is "downloads aren't tracked".
+    """
+    from google.analytics.data_v1beta.types import (
+        DateRange,
+        Dimension,
+        Metric,
+        OrderBy,
+        RunReportRequest,
+    )
+
+    request = RunReportRequest(
+        property=_property(property_id),
+        date_ranges=[DateRange(start_date=_normalize_date(start_date), end_date=_normalize_date(end_date))],
+        dimensions=[Dimension(name="eventName")],
+        metrics=[Metric(name="eventCount"), Metric(name="activeUsers")],
+        order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="eventCount"), desc=True)],
+        limit=limit,
+    )
+    response = client.run_report(request)
+
+    return [
+        EventStat(
+            event_name=row.dimension_values[0].value,
+            event_count=_int(row.metric_values[0].value),
+            active_users=_int(row.metric_values[1].value),
+        )
+        for row in response.rows
+    ]
+
+
+def events_by_dimension(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    event_name: str,
+    start_date: str | date,
+    end_date: str | date,
+    breakdown: str = "pagePath",
+    limit: int = 25,
+    path_contains: str | None = None,
+) -> list[EventBreakdown]:
+    """One event, split by a dimension.
+
+    Answers: "Where is this event firing?" — e.g. `form_submit` by pagePath, or
+    `click` by linkUrl. `path_contains` narrows to events that fired on pages
+    whose path contains a substring, whatever the breakdown dimension is.
+
+    Raises ValueError for a breakdown dimension outside EVENT_BREAKDOWN_DIMENSIONS.
+    """
+    if breakdown not in EVENT_BREAKDOWN_DIMENSIONS:
+        allowed = ", ".join(sorted(EVENT_BREAKDOWN_DIMENSIONS))
+        raise ValueError(f"breakdown must be one of: {allowed}; got {breakdown!r}")
+
+    from google.analytics.data_v1beta.types import (
+        DateRange,
+        Dimension,
+        Metric,
+        OrderBy,
+        RunReportRequest,
+    )
+
+    dimension_filter = _and_filters(
+        _event_name_filter(event_name),
+        _contains_filter("pagePath", path_contains) if path_contains else None,
+    )
+
+    request = RunReportRequest(
+        property=_property(property_id),
+        date_ranges=[DateRange(start_date=_normalize_date(start_date), end_date=_normalize_date(end_date))],
+        dimensions=[Dimension(name=breakdown)],
+        metrics=[Metric(name="eventCount"), Metric(name="activeUsers")],
+        dimension_filter=dimension_filter,
+        order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="eventCount"), desc=True)],
+        limit=limit,
+    )
+    response = client.run_report(request)
+
+    return [
+        EventBreakdown(
+            event_name=event_name,
+            dimension_name=breakdown,
+            dimension=row.dimension_values[0].value,
+            event_count=_int(row.metric_values[0].value),
+            active_users=_int(row.metric_values[1].value),
+        )
+        for row in response.rows
+    ]
+
+
+def file_downloads(
+    client: BetaAnalyticsDataClient,
+    property_id: str,
+    start_date: str | date,
+    end_date: str | date,
+    limit: int = 25,
+    path_contains: str | None = None,
+    file_extension: str | None = None,
+) -> list[DownloadStat]:
+    """Downloaded files, attributed to the page the click came from.
+
+    Answers: "How many people downloaded the case studies?" Reads GA4's
+    enhanced-measurement `file_download` event, which fires on clicks to links
+    ending in a document/media extension. Two caveats worth passing on to
+    whoever asked:
+
+      * It requires enhanced measurement (or a manual `file_download` event) to
+        be switched on. If it isn't, this returns [] — indistinguishable from a
+        real zero. Cross-check with top_events.
+      * It counts *clicks on links*, not completed transfers, and never sees a
+        file fetched directly by URL, from a CDN, or by a crawler.
+
+    `path_contains` scopes to a section of the site (e.g. "/resources");
+    `file_extension` scopes to a type (e.g. "pdf", no leading dot).
+    """
+    from google.analytics.data_v1beta.types import (
+        DateRange,
+        Dimension,
+        Metric,
+        OrderBy,
+        RunReportRequest,
+    )
+
+    dimension_filter = _and_filters(
+        _event_name_filter(FILE_DOWNLOAD_EVENT),
+        _contains_filter("pagePath", path_contains) if path_contains else None,
+        _contains_filter("fileExtension", file_extension.lstrip(".")) if file_extension else None,
+    )
+
+    request = RunReportRequest(
+        property=_property(property_id),
+        date_ranges=[DateRange(start_date=_normalize_date(start_date), end_date=_normalize_date(end_date))],
+        dimensions=[
+            Dimension(name="fileName"),
+            Dimension(name="pagePath"),
+            Dimension(name="linkUrl"),
+        ],
+        metrics=[Metric(name="eventCount"), Metric(name="activeUsers")],
+        dimension_filter=dimension_filter,
+        order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="eventCount"), desc=True)],
+        limit=limit,
+    )
+    response = client.run_report(request)
+
+    return [
+        DownloadStat(
+            file_name=row.dimension_values[0].value,
+            page_path=row.dimension_values[1].value,
+            link_url=row.dimension_values[2].value,
+            event_count=_int(row.metric_values[0].value),
+            active_users=_int(row.metric_values[1].value),
+        )
+        for row in response.rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Health check — is every property still receiving data?
 # ---------------------------------------------------------------------------
 

@@ -8,9 +8,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from ga4_toolkit.queries import (
+    EVENT_BREAKDOWN_DIMENSIONS,
+    FILE_DOWNLOAD_EVENT,
     AcquisitionStat,
     health_check_site,
     ChannelBreakdown,
+    DownloadStat,
+    EventBreakdown,
+    EventStat,
+    events_by_dimension,
+    file_downloads,
+    top_events,
     PageStat,
     SiteSummary,
     TrafficPoint,
@@ -372,3 +380,157 @@ def test_health_check_no_access_on_403(mock_client: MagicMock) -> None:
     mock_client.run_report.side_effect = gexc.PermissionDenied("no viewer role")
     result = health_check_site(mock_client, "example", "123456")
     assert result.status == "no_access"
+
+
+# ---------------------------------------------------------------------------
+# Event queries
+# ---------------------------------------------------------------------------
+
+
+def test_top_events_parses_response(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(
+        rows=[
+            make_row(["page_view"], ["52000", "9100"]),
+            make_row(["file_download"], ["430", "310"]),
+            make_row(["form_submit"], ["88", "81"]),
+        ]
+    )
+
+    result = top_events(mock_client, "123456", "2026-03-01", "2026-03-31")
+
+    assert len(result) == 3
+    assert result[0] == EventStat(event_name="page_view", event_count=52000, active_users=9100)
+    assert result[1].event_name == "file_download"
+    assert result[2].active_users == 81
+
+
+def test_top_events_empty_response(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    assert top_events(mock_client, "123456", "2026-03-01", "2026-03-31") == []
+
+
+def test_events_by_dimension_parses_and_labels_dimension(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(
+        rows=[
+            make_row(["/resources/case-study-a"], ["120", "95"]),
+            make_row(["/resources/case-study-b"], ["60", "52"]),
+        ]
+    )
+
+    result = events_by_dimension(
+        mock_client, "123456", "file_download", "2026-03-01", "2026-03-31"
+    )
+
+    assert result[0] == EventBreakdown(
+        event_name="file_download",
+        dimension_name="pagePath",
+        dimension="/resources/case-study-a",
+        event_count=120,
+        active_users=95,
+    )
+    assert result[1].dimension == "/resources/case-study-b"
+
+
+def test_events_by_dimension_rejects_unknown_breakdown(mock_client: MagicMock) -> None:
+    with pytest.raises(ValueError, match="breakdown must be one of"):
+        events_by_dimension(
+            mock_client, "123456", "file_download", "2026-03-01", "2026-03-31", breakdown="bogusDimension"
+        )
+    assert not mock_client.run_report.called
+
+
+def test_events_by_dimension_accepts_every_allowed_breakdown(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    for dimension in EVENT_BREAKDOWN_DIMENSIONS:
+        events_by_dimension(
+            mock_client, "123456", "file_download", "2026-03-01", "2026-03-31", breakdown=dimension
+        )
+    assert mock_client.run_report.call_count == len(EVENT_BREAKDOWN_DIMENSIONS)
+
+
+def test_events_by_dimension_sends_event_name_filter(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    events_by_dimension(mock_client, "123456", "form_submit", "2026-03-01", "2026-03-31")
+
+    request = mock_client.run_report.call_args[0][0]
+    # Single filter, no and_group, when path_contains is absent.
+    assert request.dimension_filter.filter.field_name == "eventName"
+    assert request.dimension_filter.filter.string_filter.value == "form_submit"
+
+
+def test_events_by_dimension_ands_path_contains(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    events_by_dimension(
+        mock_client,
+        "123456",
+        "file_download",
+        "2026-03-01",
+        "2026-03-31",
+        path_contains="/resources",
+    )
+
+    request = mock_client.run_report.call_args[0][0]
+    expressions = request.dimension_filter.and_group.expressions
+    assert len(expressions) == 2
+    assert expressions[0].filter.field_name == "eventName"
+    assert expressions[1].filter.field_name == "pagePath"
+    assert expressions[1].filter.string_filter.value == "/resources"
+
+
+def test_file_downloads_parses_response(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(
+        rows=[
+            make_row(
+                ["case-study-alpha.pdf", "/resources", "https://example.org/f/case-study-alpha.pdf"],
+                ["210", "180"],
+            ),
+            make_row(
+                ["case-study-beta.pdf", "/resources/beta", "https://example.org/f/case-study-beta.pdf"],
+                ["45", "41"],
+            ),
+        ]
+    )
+
+    result = file_downloads(mock_client, "123456", "2026-03-01", "2026-03-31")
+
+    assert len(result) == 2
+    assert result[0] == DownloadStat(
+        file_name="case-study-alpha.pdf",
+        page_path="/resources",
+        link_url="https://example.org/f/case-study-alpha.pdf",
+        event_count=210,
+        active_users=180,
+    )
+    assert result[1].page_path == "/resources/beta"
+
+
+def test_file_downloads_empty_response_is_empty_list(mock_client: MagicMock) -> None:
+    # An untracked file_download event and a genuine zero both look like this.
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    assert file_downloads(mock_client, "123456", "2026-03-01", "2026-03-31") == []
+
+
+def test_file_downloads_filters_on_event_name_only_by_default(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    file_downloads(mock_client, "123456", "2026-03-01", "2026-03-31")
+
+    request = mock_client.run_report.call_args[0][0]
+    assert request.dimension_filter.filter.string_filter.value == FILE_DOWNLOAD_EVENT
+
+
+def test_file_downloads_combines_path_and_extension_filters(mock_client: MagicMock) -> None:
+    mock_client.run_report.return_value = FakeResponse(rows=[])
+    file_downloads(
+        mock_client,
+        "123456",
+        "2026-03-01",
+        "2026-03-31",
+        path_contains="/resources",
+        file_extension=".pdf",
+    )
+
+    request = mock_client.run_report.call_args[0][0]
+    expressions = request.dimension_filter.and_group.expressions
+    assert [e.filter.field_name for e in expressions] == ["eventName", "pagePath", "fileExtension"]
+    # Leading dot is stripped — GA4 stores the extension bare.
+    assert expressions[2].filter.string_filter.value == "pdf"
