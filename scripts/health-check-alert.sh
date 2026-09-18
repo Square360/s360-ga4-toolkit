@@ -20,7 +20,7 @@ PROJECT_SLUG="ga4-analytics-tools-project"
 ALERT_DIR="/Volumes/Work/ClaudeCowork/WorkAreas/Infrastructure/$PROJECT_SLUG/outputs/alerts"
 
 # ── wait for network (2026-09-18): the Mac dark-wakes at 07:00 and this job
-# runs at 08:05, sometimes before networking is back. Probe up to 10 minutes.
+# ran at 08:05 (moved to 09:30 on 2026-09-18), sometimes before networking is back. Probe up to 10 minutes.
 wait_for_network() {
     local i
     for i in $(seq 1 40); do
