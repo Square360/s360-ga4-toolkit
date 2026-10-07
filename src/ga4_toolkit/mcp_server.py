@@ -217,20 +217,14 @@ def health_check(days: int = 3) -> dict[str, Any]:
     A site is dead when it shows zero active users AND zero pageviews across
     the whole window — stray bot sessions don't count as alive. Sites marked
     skip_health_check in sites.yaml report as skipped; 403s as no_access.
+    Three 503/504s in a row stop the sweep (local network outage): the
+    remaining sites report aborted, and the answer is to re-run.
 
     Returns {window_days, healthy, results: [{site, property_id, status,
     active_users, pageviews, detail}]}.
     """
     client, _config = _client_and_config()
-    sites = load_sites()
-    results = []
-    for name, cfg in sites.items():
-        if cfg.skip_health_check:
-            results.append(
-                queries.HealthResult(name, cfg.property_id, "skipped", 0, 0, detail="skip_health_check")
-            )
-            continue
-        results.append(queries.health_check_site(client, name, cfg.property_id, window_days=days))
+    results = queries.health_check_all(client, load_sites(), window_days=days)
     return {
         "window_days": days,
         "healthy": all(r.status in ("ok", "skipped", "no_access") for r in results),

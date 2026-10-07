@@ -14,12 +14,16 @@ Design principles:
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from google.analytics.data_v1beta import BetaAnalyticsDataClient
+
+    from ga4_toolkit.config import SiteConfig
 
 
 # ---------------------------------------------------------------------------
@@ -904,11 +908,13 @@ class HealthResult:
       no_access — the service account got a 403 for this property
       error     — any other API failure (quota, transient, misconfig)
       skipped   — sites.yaml marks the site skip_health_check: true
+      aborted   — not checked: the sweep stopped after consecutive 503/504s
+                  (network or Google API outage, not this property)
     """
 
     site: str
     property_id: str
-    status: Literal["ok", "dead", "no_access", "error", "skipped"]
+    status: Literal["ok", "dead", "no_access", "error", "skipped", "aborted"]
     active_users: int
     pageviews: int
     detail: str = ""
@@ -948,3 +954,37 @@ def health_check_site(
     views = sum(p.pageviews for p in points)
     status: Literal["ok", "dead"] = "ok" if (users > 0 or views > 0) else "dead"
     return HealthResult(site_name, property_id, status, users, views)
+
+
+_TRANSIENT_ERROR = re.compile(r"^50[34]\b")
+
+
+def health_check_all(
+    client: BetaAnalyticsDataClient,
+    sites: Mapping[str, SiteConfig],
+    window_days: int = 3,
+    max_transient: int = 3,
+) -> list[HealthResult]:
+    """Run health_check_site over every site, stopping on a network outage.
+
+    `max_transient` 503/504s in a row means an outage under the sweep (local
+    network dropped, or Google's API is down), not that those properties broke: the
+    sweep stops there and every remaining site reports `aborted`, so the
+    report says "re-run" instead of listing a wall of false errors.
+    """
+    results: list[HealthResult] = []
+    streak = 0
+    for name, cfg in sites.items():
+        if cfg.skip_health_check:
+            results.append(HealthResult(name, cfg.property_id, "skipped", 0, 0, detail="skip_health_check"))
+            continue
+        if streak >= max_transient:
+            results.append(HealthResult(
+                name, cfg.property_id, "aborted", 0, 0,
+                detail=f"not checked: {max_transient} consecutive 503/504s (network or Google API outage)",
+            ))
+            continue
+        result = health_check_site(client, name, cfg.property_id, window_days=window_days)
+        streak = streak + 1 if result.status == "error" and _TRANSIENT_ERROR.match(result.detail) else 0
+        results.append(result)
+    return results

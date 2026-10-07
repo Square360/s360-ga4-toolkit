@@ -11,6 +11,10 @@ Decisions made here, not in the shell:
 - no_access alerts only on the second consecutive run a site reports it
   (permission revocations persist; API hiccups don't). State lives in
   .no-access-state.json beside this script (gitignored).
+- `aborted` sites mean the sweep itself stopped on consecutive 503/504s:
+  that's an outage at check time (local network or Google's API, which the
+  check can't tell apart), so those errors collapse to one "re-run" line
+  instead of listing properties.
 - `--transient` asks only whether any error looks like a network/API blip
   (5xx, deadline, connect failure). The wrapper uses it to decide whether to
   wait for the network and re-run the sweep before classifying; it never
@@ -52,7 +56,7 @@ def main() -> None:
     results = data["results"]
 
     if "--transient" in sys.argv[1:]:
-        transient = any(
+        transient = any(r["status"] == "aborted" for r in results) or any(
             r["status"] == "error"
             and (TRANSIENT_PATTERN.search(r["detail"] or "") or DNS_PATTERN.search(r["detail"] or ""))
             for r in results
@@ -60,6 +64,7 @@ def main() -> None:
         sys.exit(11 if transient else 0)
     checked = [r for r in results if r["status"] != "skipped"]
     broken = [r for r in results if r["status"] in ("dead", "error")]
+    aborted = [r for r in results if r["status"] == "aborted"]
     no_access_now = sorted(r["site"] for r in results if r["status"] == "no_access")
 
     prior_no_access = set(load_state().get("no_access", []))
@@ -69,7 +74,19 @@ def main() -> None:
 
     lines = []
 
-    if broken and len(broken) == len(checked) and all(
+    if aborted:
+        # Collapse only the 503/504s; a dead site found before the outage still lists.
+        net = [r for r in broken if r["status"] == "error" and TRANSIENT_PATTERN.search(r["detail"] or "")]
+        lines.append(
+            "Network error at check time: {e} properties in a row returned 503/504, "
+            "so the sweep stopped with {a} of {n} unchecked. Either the local network "
+            "dropped or Google's API is having an outage (https://status.cloud.google.com); "
+            "the check can't tell which. Request a re-run: `ga4 health-check`.".format(
+                e=len(net), a=len(aborted), n=len(checked)
+            )
+        )
+        broken = [r for r in broken if r not in net]
+    elif broken and len(broken) == len(checked) and all(
         DNS_PATTERN.search(r["detail"] or "") for r in broken
     ):
         lines.append(

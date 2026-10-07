@@ -11,6 +11,7 @@ from ga4_toolkit.queries import (
     EVENT_BREAKDOWN_DIMENSIONS,
     FILE_DOWNLOAD_EVENT,
     AcquisitionStat,
+    health_check_all,
     health_check_site,
     ChannelBreakdown,
     DownloadStat,
@@ -380,6 +381,37 @@ def test_health_check_no_access_on_403(mock_client: MagicMock) -> None:
     mock_client.run_report.side_effect = gexc.PermissionDenied("no viewer role")
     result = health_check_site(mock_client, "example", "123456")
     assert result.status == "no_access"
+
+
+def _sites(n: int) -> dict:
+    from ga4_toolkit.config import SiteConfig
+
+    return {f"s{i}": SiteConfig(f"s{i}", str(i), f"s{i}.example") for i in range(n)}
+
+
+def test_health_check_all_stops_after_consecutive_503s(mock_client: MagicMock) -> None:
+    from google.api_core import exceptions as gexc
+
+    ok = FakeResponse(rows=[make_row(["20260805"], [5, 5, 5])])
+    mock_client.run_report.side_effect = [
+        ok,
+        gexc.ServiceUnavailable("failed to connect"),
+        gexc.DeadlineExceeded("Deadline Exceeded"),
+        gexc.ServiceUnavailable("no route to host"),
+    ]
+    results = health_check_all(mock_client, _sites(6))
+    assert [r.status for r in results] == ["ok", "error", "error", "error", "aborted", "aborted"]
+    assert mock_client.run_report.call_count == 4
+
+
+def test_health_check_all_streak_resets_on_success(mock_client: MagicMock) -> None:
+    from google.api_core import exceptions as gexc
+
+    ok = FakeResponse(rows=[make_row(["20260805"], [5, 5, 5])])
+    blip = gexc.DeadlineExceeded("Deadline Exceeded")
+    mock_client.run_report.side_effect = [blip, blip, ok, blip, blip]
+    results = health_check_all(mock_client, _sites(5))
+    assert "aborted" not in [r.status for r in results]
 
 
 # ---------------------------------------------------------------------------

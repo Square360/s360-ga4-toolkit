@@ -654,7 +654,8 @@ def health_check_cmd(
 ) -> None:
     """Check every configured site is still receiving data.
 
-    Exits 1 if any site is dead or errored (plus no-access sites with
+    Stops after 3 consecutive 503/504s (network outage) and reports the rest
+    as aborted. Exits 1 if any site is dead, errored or aborted (plus no-access sites with
     --fail-on-no-access), 0 when everything is ok/skipped. Designed for
     scheduled runs: `--format json` + exit code is the whole contract.
     """
@@ -665,16 +666,9 @@ def health_check_cmd(
         err_console.print(f"[red]Config error:[/red] {e}")
         raise typer.Exit(code=2) from None
 
-    results: list[queries.HealthResult] = []
-    for name, cfg in sites.items():
-        if cfg.skip_health_check:
-            results.append(
-                queries.HealthResult(name, cfg.property_id, "skipped", 0, 0, detail="skip_health_check")
-            )
-            continue
-        results.append(queries.health_check_site(client, name, cfg.property_id, window_days=days))
+    results = queries.health_check_all(client, sites, window_days=days)
 
-    bad_statuses = {"dead", "error"} | ({"no_access"} if fail_on_no_access else set())
+    bad_statuses = {"dead", "error", "aborted"} | ({"no_access"} if fail_on_no_access else set())
     failures = [r for r in results if r.status in bad_statuses]
 
     if fmt == OutputFormat.JSON:
@@ -693,7 +687,10 @@ def health_check_cmd(
         for r in results:
             writer.writerow(r.to_dict())
     else:
-        style = {"ok": "green", "dead": "red bold", "no_access": "yellow", "error": "red", "skipped": "dim"}
+        style = {
+            "ok": "green", "dead": "red bold", "no_access": "yellow",
+            "error": "red", "skipped": "dim", "aborted": "yellow",
+        }
         table = Table(title=f"GA4 health check — last {days} full days", header_style="bold")
         table.add_column("Site")
         table.add_column("Status")
