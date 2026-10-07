@@ -11,8 +11,13 @@ Decisions made here, not in the shell:
 - no_access alerts only on the second consecutive run a site reports it
   (permission revocations persist; API hiccups don't). State lives in
   .no-access-state.json beside this script (gitignored).
+- `--transient` asks only whether any error looks like a network/API blip
+  (5xx, deadline, connect failure). The wrapper uses it to decide whether to
+  wait for the network and re-run the sweep before classifying; it never
+  touches the no_access state, so a retry doesn't count as a second run.
 
-Exit codes: 0 = healthy, nothing to send; 10 = alert body on stdout, send it.
+Exit codes: 0 = healthy, nothing to send; 10 = alert body on stdout, send it;
+11 = (--transient only) transient errors present, re-run before alerting.
 """
 import json
 import os
@@ -21,6 +26,11 @@ import sys
 
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".no-access-state.json")
 DNS_PATTERN = re.compile(r"dns|hostname lookup|address lookup|name resolution", re.I)
+TRANSIENT_PATTERN = re.compile(
+    r"^50[234]\b|deadline exceeded|failed to connect|no route to host|"
+    r"can't assign requested address|connection (reset|refused)|timed out|unavailable",
+    re.I,
+)
 
 
 def load_state() -> dict:
@@ -40,6 +50,14 @@ def save_state(state: dict) -> None:
 def main() -> None:
     data = json.load(sys.stdin)
     results = data["results"]
+
+    if "--transient" in sys.argv[1:]:
+        transient = any(
+            r["status"] == "error"
+            and (TRANSIENT_PATTERN.search(r["detail"] or "") or DNS_PATTERN.search(r["detail"] or ""))
+            for r in results
+        )
+        sys.exit(11 if transient else 0)
     checked = [r for r in results if r["status"] != "skipped"]
     broken = [r for r in results if r["status"] in ("dead", "error")]
     no_access_now = sorted(r["site"] for r in results if r["status"] == "no_access")

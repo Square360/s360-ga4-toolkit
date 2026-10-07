@@ -10,3 +10,10 @@ Small items queued for the next working session in this repo.
   persisting `error` like `no_access` — alert only after two consecutive runs
   (same rule added 2026-08-13 for no_access). George's ruling: fix next time
   we're in here, no ticket.
+  - **Retry: done 2026-10-07.** The wrapper re-runs the sweep once after a
+    transient error (5xx, deadline, connect failure), following a network wait.
+    Trigger: a laptop network drop mid-sweep errored 7 properties.
+  - **Two-run rule: still open, deliberately.** George 2026-10-07: an alert he
+    questions and we re-check is the system working. Deferring persistent errors
+    a day would hide a real outage, so this stays unbuilt unless false alarms
+    keep getting through the retry.

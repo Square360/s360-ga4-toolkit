@@ -53,6 +53,22 @@ fi
 json="$("$GA4" health-check --format json 2>/tmp/ga4-health-stderr.log)"
 ga4_status=$?
 
+# ── transient retry (2026-10-07): a network drop mid-sweep (laptop closed,
+# Wi-Fi gone) or a one-off 504 errors the remaining properties. If any error
+# looks transient, wait a minute, wait for the network, and re-run the whole
+# sweep; only the second run's result is classified and can alert.
+if [ -n "$json" ]; then
+    printf '%s' "$json" | python3 "$TOOLKIT_DIR/scripts/health_alert.py" --transient
+    if [ $? -eq 11 ]; then
+        echo "$TODAY transient errors; retrying" >&2
+        sleep 60
+        if wait_for_network; then
+            json="$("$GA4" health-check --format json 2>/tmp/ga4-health-stderr.log)"
+            ga4_status=$?
+        fi
+    fi
+fi
+
 if [ -n "$json" ]; then
     body="$(printf '%s' "$json" | python3 "$TOOLKIT_DIR/scripts/health_alert.py")"
     alert_status=$?
