@@ -99,7 +99,7 @@ osascript -e 'display notification "GA4 health alert filed in the console (ga4-a
 # ── team ping (2026-10-10): the alert also goes to the ClickUp Development chat
 # as Grimbert, so it reaches the team when George is away. The alert file stays
 # the record; a failed post is logged, not fatal. GA4_ALERT_CHANNEL=sandbox to test.
-printf '%s\n' "$body" | python3 "$NOTIFY" --channel "${GA4_ALERT_CHANNEL:-development}" \
+printf '%s\n\n%s\n' "$body" "Please check the affected properties to confirm GA4 and GTM connectivity." | python3 "$NOTIFY" --channel "${GA4_ALERT_CHANNEL:-development}" \
     --title "GA4 health alert $TODAY" \
     --source "Daily GA4 health check. Full record: $PROJECT_SLUG/outputs/alerts/" \
     || echo "$TODAY ClickUp chat post failed (alert file written)" >&2
