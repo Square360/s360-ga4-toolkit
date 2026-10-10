@@ -4,8 +4,8 @@
 # Runs `ga4 health-check` across every site in config/sites.yaml and hands the
 # JSON to health_alert.py, which decides whether an alert is due (dead/error
 # sites; no_access on two consecutive runs; all-sites DNS failures collapse to
-# a one-liner). A due alert becomes an alert file plus a macOS
-# notification. Alerts are Markdown files in the ga4-analytics-tools project's
+# a one-liner). A due alert becomes an alert file, a macOS notification and a
+# post to the ClickUp Development chat. Alerts are Markdown files in the ga4-analytics-tools project's
 # outputs/alerts/ (Squircle Console); Bear retired 2026-09-18. Silence means healthy. Invoked by the LaunchAgent
 # com.square360.ga4-health (daily, morning); safe to run by hand.
 #
@@ -18,6 +18,7 @@ GA4="$TOOLKIT_DIR/.venv/bin/ga4"
 TODAY="$(date +%Y-%m-%d)"
 PROJECT_SLUG="ga4-analytics-tools-project"
 ALERT_DIR="/Volumes/Work/ClaudeCowork/WorkAreas/Infrastructure/$PROJECT_SLUG/outputs/alerts"
+NOTIFY="/Volumes/Work/ClaudeCowork/.claude/tools/clickup-chat-notify.py"
 
 # ── wait for network (2026-09-18): the Mac dark-wakes at 07:00 and this job
 # ran at 08:05 (moved to 09:30 on 2026-09-18), sometimes before networking is back. Probe up to 10 minutes.
@@ -94,6 +95,14 @@ if [ $? -ne 0 ]; then
 fi
 
 osascript -e 'display notification "GA4 health alert filed in the console (ga4-analytics-tools outputs/alerts)" with title "GA4 Health" sound name "Basso"' >/dev/null 2>&1
+
+# ── team ping (2026-10-10): the alert also goes to the ClickUp Development chat
+# as Grimbert, so it reaches the team when George is away. The alert file stays
+# the record; a failed post is logged, not fatal. GA4_ALERT_CHANNEL=sandbox to test.
+printf '%s\n' "$body" | python3 "$NOTIFY" --channel "${GA4_ALERT_CHANNEL:-development}" \
+    --title "GA4 health alert $TODAY" \
+    --source "Daily GA4 health check. Full record: $PROJECT_SLUG/outputs/alerts/" \
+    || echo "$TODAY ClickUp chat post failed (alert file written)" >&2
 
 echo "$TODAY alert created"
 exit 0
