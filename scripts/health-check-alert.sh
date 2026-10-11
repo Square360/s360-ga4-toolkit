@@ -13,19 +13,24 @@
 
 set -u
 
-TOOLKIT_DIR="/Volumes/Work/ClaudeCowork/WorkAreas/_code/s360-ga4-toolkit"
+# Paths default to George's Mac; sq2024 sets them in its systemd unit (2026-10-10).
+TOOLKIT_DIR="${TOOLKIT_DIR:-/Volumes/Work/ClaudeCowork/WorkAreas/_code/s360-ga4-toolkit}"
 GA4="$TOOLKIT_DIR/.venv/bin/ga4"
 TODAY="$(date +%Y-%m-%d)"
 PROJECT_SLUG="ga4-analytics-tools-project"
-ALERT_DIR="/Volumes/Work/ClaudeCowork/WorkAreas/Infrastructure/$PROJECT_SLUG/outputs/alerts"
-NOTIFY="/Volumes/Work/ClaudeCowork/.claude/tools/clickup-chat-notify.py"
+ALERT_DIR="${ALERT_DIR:-/Volumes/Work/ClaudeCowork/WorkAreas/Infrastructure/$PROJECT_SLUG/outputs/alerts}"
+NOTIFY="${NOTIFY:-/Volumes/Work/ClaudeCowork/.claude/tools/clickup-chat-notify.py}"
 
 # ── wait for network (2026-09-18): the Mac dark-wakes at 07:00 and this job
 # ran at 08:05 (moved to 09:30 on 2026-09-18), sometimes before networking is back. Probe up to 10 minutes.
 wait_for_network() {
     local i
     for i in $(seq 1 40); do
-        nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1 && return 0
+        if command -v nc >/dev/null; then
+            nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1 && return 0
+        else  # sq2024 has no nc
+            python3 -c 'import socket; socket.create_connection(("1.1.1.1", 443), 3)' 2>/dev/null && return 0
+        fi
         sleep 15
     done
     return 1
