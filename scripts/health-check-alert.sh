@@ -43,7 +43,7 @@ write_alert() {  # $1 title  $2 slug  $3 description ; body on stdin
     mkdir -p "$dir" || return 1
     while [ -e "$file" ]; do n=$((n+1)); file="$dir/${TODAY}_$2_Alert_v$n.md"; done
     {
-        printf -- '---\nname: %s\ndescription: %s\ntype: alert\nproject: %s\ncreated: %s\n---\n\n# %s\n\n' "$1" "$3" "$PROJECT_SLUG" "$TODAY" "$1"
+        printf -- '---\nname: %s\ndescription: "%s"\ntype: alert\nproject: %s\ncreated: %s\n---\n\n# %s\n\n' "$1" "$3" "$PROJECT_SLUG" "$TODAY" "$1"
         cat
     } > "$file"
 }
